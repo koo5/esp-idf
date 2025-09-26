@@ -127,13 +127,15 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
 
 
         // Ask device to report temperature
+        static uint16_t temp_change_threshold = 100; // 1.0°C change threshold (in 0.01°C units)
+
         esp_zb_zcl_config_report_record_t report_record = {
             .direction = ESP_ZB_ZCL_REPORT_DIRECTION_SEND,
             .attributeID = ESP_ZB_ZCL_ATTR_TEMP_MEASUREMENT_VALUE_ID,
             .attrType = ESP_ZB_ZCL_ATTR_TYPE_S16,
             .min_interval = 10,  // report no more often than 10s
             .max_interval = 60,  // report at least every 60s
-            .reportable_change = NULL,
+            .reportable_change = &temp_change_threshold,
         };
 
         esp_zb_zcl_config_report_cmd_t req = {
@@ -144,6 +146,10 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
             },
             .address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT,
             .clusterID = ESP_ZB_ZCL_CLUSTER_ID_TEMP_MEASUREMENT,
+            .manuf_specific = 0,
+            .direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV,
+            .dis_default_resp = 0,
+            .manuf_code = 0,
             .record_number = 1,
             .record_field = &report_record,
         };
@@ -192,6 +198,15 @@ static esp_err_t zb_app_signal_handler_impl(esp_zb_core_action_callback_id_t cal
             int16_t raw = *(int16_t *)msg->attribute.data.value;
             float temperature = raw / 100.0f; // Zigbee encodes temp in 0.01 °C
             ESP_LOGI("TEMP", "Temperature: %.2f °C", temperature);
+        }
+        break;
+    }
+    case ESP_ZB_CORE_CMD_CUSTOM_CLUSTER_REQ_CB_ID: {
+        esp_zb_zcl_custom_cluster_command_message_t *msg = (esp_zb_zcl_custom_cluster_command_message_t *)message;
+        if (msg && msg->info.cluster == 0xef00) {
+            ESP_LOGI(TAG, "Received custom cluster 0xef00 command: cmd_id=0x%02x, src_addr=0x%04x",
+                     msg->info.command.id, msg->info.src_address.u.short_addr);
+            // Handle custom cluster commands here
         }
         break;
     }
@@ -246,6 +261,9 @@ static void esp_zb_task(void *pvParameters)
 		temp_cluster,
 		ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
 
+	// Add custom cluster 0xef00 (commonly used by Tuya devices)
+	esp_zb_attribute_list_t *custom_cluster = esp_zb_zcl_attr_list_create(0xef00);
+	esp_zb_cluster_list_add_custom_cluster(cluster_list, custom_cluster, ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE);
 
 	esp_zb_ep_list_add_gateway_ep(ep_list, cluster_list, endpoint_config);
 	esp_zb_device_register(ep_list);
