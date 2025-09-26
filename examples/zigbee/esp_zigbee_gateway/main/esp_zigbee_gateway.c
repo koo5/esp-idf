@@ -186,6 +186,58 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
 
 
 
+
+
+static void tuya_cluster_parse_and_print(uint8_t *data, uint16_t len)
+{
+    if (len < 7) { // minimal Tuya payload length
+        ESP_LOGW("TUYA", "Invalid payload (len=%d)", len);
+        return;
+    }
+
+    uint8_t status = data[0];
+    uint8_t seq    = data[1];
+    uint8_t dpid   = data[2];
+    uint8_t dtype  = data[3];
+    uint16_t dlen  = (data[4] << 8) | data[5];
+
+    if (6 + dlen > len) {
+        ESP_LOGW("TUYA", "Length mismatch (dlen=%d, total=%d)", dlen, len);
+        return;
+    }
+
+    ESP_LOGI("TUYA", "DPID=0x%02X, type=0x%02X, len=%d, seq=%d", dpid, dtype, dlen, seq);
+
+    if (dtype == 0x02 && dlen == 4) { // value, int32
+        int value = (data[6] << 24) | (data[7] << 16) | (data[8] << 8) | data[9];
+
+        switch (dpid) {
+        case 0x01: // temperature (*10)
+            ESP_LOGI("TEMP", "🌡️  Temperature = %.1f °C", value / 10.0f);
+            break;
+        case 0x02: // humidity
+            ESP_LOGI("TUYA", "💧 Humidity = %d %%", value);
+            break;
+        case 0x04: // battery
+            ESP_LOGI("TUYA", "🔋 Battery = %d %%", value);
+            break;
+        default:
+            ESP_LOGI("TUYA", "Unhandled DPID=0x%02X, value=%d", dpid, value);
+            break;
+        }
+    } else {
+        ESP_LOGI("TUYA", "Unhandled data type=0x%02X", dtype);
+    }
+}
+
+
+
+
+
+
+
+
+
 static esp_err_t zb_app_signal_handler_impl(esp_zb_core_action_callback_id_t callback_id, const void *message)
 {
     esp_err_t ret = ESP_OK;
@@ -204,9 +256,15 @@ static esp_err_t zb_app_signal_handler_impl(esp_zb_core_action_callback_id_t cal
     case ESP_ZB_CORE_CMD_CUSTOM_CLUSTER_REQ_CB_ID: {
         esp_zb_zcl_custom_cluster_command_message_t *msg = (esp_zb_zcl_custom_cluster_command_message_t *)message;
         if (msg && msg->info.cluster == 0xef00) {
-            ESP_LOGI(TAG, "Received custom cluster 0xef00 command: cmd_id=0x%02x, src_addr=0x%04x",
-                     msg->info.command.id, msg->info.src_address.u.short_addr);
-            // Handle custom cluster commands here
+            ESP_LOGI(TAG, "Received custom cluster 0xef00 command: cmd_id=0x%02x, src_addr=0x%04x, data_len=%d",
+                     msg->info.command.id, msg->info.src_address.u.short_addr, msg->data.size);
+
+            if (msg->data.size > 0 && msg->data.value) {
+                ESP_LOG_BUFFER_HEX(TAG, msg->data.value, msg->data.size);
+
+                tuya_cluster_parse_and_print(msg->data.value, msg->data.size);
+
+            }
         }
         break;
     }
